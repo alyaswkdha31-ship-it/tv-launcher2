@@ -1,6 +1,530 @@
 # This is a basic workflow to help you get started with Actions
 
-name: CI
+name: CIpackage com.example.mylauncher
+
+import android.app.Activity
+import android.app.AlertDialog
+import android.content.Intent
+import android.content.SharedPreferences
+import android.content.pm.ResolveInfo
+import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.Gravity
+import android.view.View
+import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.BaseAdapter
+import android.widget.Button
+import android.widget.CheckBox
+import android.widget.GridView
+import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.Spinner
+import android.widget.TextClock
+import android.widget.TextView
+import org.json.JSONObject
+import java.net.URL
+import java.util.Calendar
+
+class MainActivity : Activity() {
+
+    private lateinit var prefs: SharedPreferences
+
+    private data class CityOption(
+        val name: String,
+        val lat: Double,
+        val lon: Double,
+        val method: Int
+    )
+
+    private val cityOptions = listOf(
+        CityOption("الكويت", 29.3759, 47.9774, 9),
+        CityOption("الرياض", 24.7136, 46.6753, 4),
+        CityOption("مكة المكرمة", 21.3891, 39.8579, 4),
+        CityOption("جدة", 21.4858, 39.1925, 4),
+        CityOption("دبي", 25.2048, 55.2708, 8),
+        CityOption("الدوحة", 25.2854, 51.5310, 8),
+        CityOption("القاهرة", 30.0444, 31.2357, 5),
+        CityOption("أبو ظبي", 24.4539, 54.3773, 8)
+    )
+
+    private val methodOptions = listOf(
+        0 to "0 - طريقة شيوع",
+        1 to "1 - جامعة العلوم الإسلامية، كراتشي",
+        2 to "2 - الجمعية الإسلامية لأمريكا الشمالية",
+        3 to "3 - رابطة العالم الإسلامي",
+        4 to "4 - جامعة أم القرى",
+        5 to "5 - الهيئة المصرية العامة للمساحة",
+        7 to "7 - جامعة طهران",
+        8 to "8 - المنطقة الخليجية",
+        9 to "9 - الكويت"
+    )
+
+    private val backgroundOptions = listOf(
+        "dark" to "داكن",
+        "ocean" to "ماء/أزرق",
+        "night" to "ليل",
+        "gold" to "ذهبي"
+    )
+
+    private var cityName = "الكويت"
+    private var lat = 29.3759
+    private var lon = 47.9774
+    private var method = 9
+    private var showWeather = true
+    private var showPrayer = true
+    private var backgroundKey = "dark"
+
+    private val keys = listOf("Fajr", "Dhuhr", "Asr", "Maghrib", "Isha")
+    private val names = listOf("الفجر", "الظهر", "العصر", "المغرب", "العشاء")
+    private val mins = IntArray(5) { -1 }
+
+    private val boxes = mutableListOf<LinearLayout>()
+    private val times = mutableListOf<TextView>()
+    private val h = Handler(Looper.getMainLooper())
+    private val match = ViewGroup.LayoutParams.MATCH_PARENT
+    private val wrap = ViewGroup.LayoutParams.WRAP_CONTENT
+    private var lastFetch = 0L
+    private lateinit var apps: List<ResolveInfo>
+    private lateinit var weather: TextView
+    private lateinit var prayerBar: LinearLayout
+    private lateinit var settingsButton: Button
+
+    private val tick = object : Runnable {
+        override fun run() {
+            highlight()
+            if (System.currentTimeMillis() - lastFetch > 1800000L) {
+                lastFetch = System.currentTimeMillis()
+                load()
+            }
+            h.postDelayed(this, 60000L)
+        }
+    }
+
+    override fun onCreate(b: Bundle?) {
+        super.onCreate(b)
+        prefs = getSharedPreferences("launcher_settings", MODE_PRIVATE)
+        readSettings()
+
+        val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+        apps = packageManager.queryIntentActivities(q, 0)
+            .filter { it.activityInfo.packageName != packageName }
+            .sortedBy { it.loadLabel(packageManager).toString() }
+
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(80, 50, 80, 40)
+        }
+
+        applyBackgroundStyle(root)
+
+        val head = LinearLayout(this).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, 24)
+        }
+        head.addView(tv("واجهتي", 34f), LinearLayout.LayoutParams(0, wrap, 1f))
+
+        weather = tv("$cityName ...", 22f).apply {
+            setPadding(0, 0, 20, 0)
+            visibility = if (showWeather) View.VISIBLE else View.GONE
+        }
+        head.addView(weather)
+
+        settingsButton = Button(this).apply {
+            text = "⚙️"
+            setBackgroundColor(Color.parseColor("#33FFFFFF"))
+            setTextColor(Color.WHITE)
+            textSize = 18f
+            setPadding(24, 12, 24, 12)
+            setOnClickListener { showSettingsDialog() }
+        }
+        head.addView(settingsButton, LinearLayout.LayoutParams(wrap, wrap).apply {
+            setMargins(16, 0, 0, 0)
+        })
+
+        val clock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.END
+        }
+
+        clock.addView(TextClock(this).apply {
+            format12Hour = "hh:mm a"
+            format24Hour = "HH:mm"
+            textSize = 40f
+            setTextColor(Color.WHITE)
+        })
+
+        clock.addView(TextClock(this).apply {
+            format12Hour = "EEEE d MMMM"
+            format24Hour = "EEEE d MMMM"
+            textSize = 16f
+            setTextColor(Color.WHITE)
+        })
+
+        head.addView(clock)
+        root.addView(head)
+
+        prayerBar = LinearLayout(this).apply {
+            setPadding(0, 0, 0, 32)
+            visibility = if (showPrayer) View.VISIBLE else View.GONE
+        }
+
+        for (i in 0..4) {
+            val box = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(8, 16, 8, 16)
+                background = bg("#22FFFFFF")
+            }
+
+            box.addView(tv(names[i], 18f).apply { gravity = Gravity.CENTER })
+            val t = tv("--:--", 24f).apply { gravity = Gravity.CENTER }
+            box.addView(t)
+            boxes.add(box)
+            times.add(t)
+
+            prayerBar.addView(
+                box,
+                LinearLayout.LayoutParams(0, wrap, 1f).apply { setMargins(8, 0, 8, 0) }
+            )
+        }
+
+        root.addView(prayerBar)
+
+        val grid = GridView(this).apply {
+            numColumns = 5
+            horizontalSpacing = 24
+            verticalSpacing = 24
+            selector = ColorDrawable(Color.parseColor("#55FFFFFF"))
+            adapter = object : BaseAdapter() {
+                override fun getCount() = apps.size
+                override fun getItem(p: Int) = apps[p]
+                override fun getItemId(p: Int) = p.toLong()
+
+                override fun getView(p: Int, v: View?, parent: ViewGroup): View {
+                    val a = apps[p]
+                    val pm = packageManager
+
+                    return LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        setPadding(16, 24, 16, 24)
+
+                        addView(
+                            ImageView(context).apply {
+                                setImageDrawable(a.activityInfo.loadBanner(pm) ?: a.loadIcon(pm))
+                            },
+                            LinearLayout.LayoutParams(220, 124)
+                        )
+
+                        addView(
+                            tv(a.loadLabel(pm).toString(), 16f).apply {
+                                gravity = Gravity.CENTER
+                                maxLines = 1
+                            }
+                        )
+                    }
+                }
+            }
+
+            setOnItemClickListener { _, _, p, _ ->
+                packageManager.getLaunchIntentForPackage(apps[p].activityInfo.packageName)
+                    ?.let { startActivity(it) }
+            }
+        }
+
+        root.addView(grid, LinearLayout.LayoutParams(match, match))
+        setContentView(root)
+    }
+
+    private fun readSettings() {
+        cityName = prefs.getString("city_name", "الكويت") ?: "الكويت"
+        lat = prefs.getFloat("lat", 29.3759f).toDouble()
+        lon = prefs.getFloat("lon", 47.9774f).toDouble()
+        method = prefs.getInt("method", 9)
+        showWeather = prefs.getBoolean("show_weather", true)
+        showPrayer = prefs.getBoolean("show_prayer", true)
+        backgroundKey = prefs.getString("background_key", "dark") ?: "dark"
+
+        val city = cityOptions.find { it.name == cityName }
+        if (city != null) {
+            lat = city.lat
+            lon = city.lon
+            method = city.method
+        }
+    }
+
+    private fun saveSettings() {
+        prefs.edit()
+            .putString("city_name", cityName)
+            .putFloat("lat", lat.toFloat())
+            .putFloat("lon", lon.toFloat())
+            .putInt("method", method)
+            .putBoolean("show_weather", showWeather)
+            .putBoolean("show_prayer", showPrayer)
+            .putString("background_key", backgroundKey)
+            .apply()
+    }
+
+    private fun applyBackgroundStyle(root: ViewGroup? = null) {
+        val bgColor = when (backgroundKey) {
+            "dark" -> "#0F2027"
+            "ocean" -> "#0B3C5D"
+            "night" -> "#1B1B2F"
+            "gold" -> "#3D2B1F"
+            else -> "#0F2027"
+        }
+
+        val overlayColor = when (backgroundKey) {
+            "dark" -> "#88000000"
+            "ocean" -> "#882B5B8A"
+            "night" -> "#881B1B2F"
+            "gold" -> "#88A3642A"
+            else -> "#88000000"
+        }
+
+        val wall = resources.getIdentifier("wallpaper", "drawable", packageName)
+
+        if (root != null) {
+            root.background = if (wall != 0) {
+                LayerDrawable(
+                    arrayOf<Drawable>(
+                        getDrawable(wall)!!,
+                        ColorDrawable(Color.parseColor(overlayColor))
+                    )
+                )
+            } else {
+                GradientDrawable(
+                    GradientDrawable.Orientation.TL_BR,
+                    intArrayOf(
+                        Color.parseColor(bgColor),
+                        Color.parseColor("#2C5364")
+                    )
+                )
+            }
+        }
+    }
+
+    private fun showSettingsDialog() {
+        val selectedCityIndex = cityOptions.indexOfFirst { it.name == cityName }
+            .let { if (it >= 0) it else 0 }
+
+        val selectedMethodIndex = methodOptions.indexOfFirst { it.first == method }
+            .let { if (it >= 0) it else 0 }
+
+        val selectedBackgroundIndex = backgroundOptions.indexOfFirst { it.first == backgroundKey }
+            .let { if (it >= 0) it else 0 }
+
+        val citySpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                cityOptions.map { it.name }
+            )
+            setSelection(selectedCityIndex)
+        }
+
+        val methodSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                methodOptions.map { it.second }
+            )
+            setSelection(selectedMethodIndex)
+        }
+
+        val backgroundSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                backgroundOptions.map { it.second }
+            )
+            setSelection(selectedBackgroundIndex)
+        }
+
+        val weatherToggle = CheckBox(this).apply {
+            text = "إظهار الطقس"
+            isChecked = showWeather
+        }
+
+        val prayerToggle = CheckBox(this).apply {
+            text = "إظهار مواقيت الصلاة"
+            isChecked = showPrayer
+        }
+
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(30, 20, 30, 10)
+        }
+
+        container.addView(TextView(this).apply {
+            text = "المدينة"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(0, 10, 0, 8)
+        })
+        container.addView(citySpinner)
+
+        container.addView(TextView(this).apply {
+            text = "طريقة حساب الأذان"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(0, 18, 0, 8)
+        })
+        container.addView(methodSpinner)
+
+        container.addView(TextView(this).apply {
+            text = "الخلفية"
+            textSize = 18f
+            setTextColor(Color.WHITE)
+            setPadding(0, 18, 0, 8)
+        })
+        container.addView(backgroundSpinner)
+
+        container.addView(weatherToggle)
+        container.addView(prayerToggle)
+
+        val dialog = AlertDialog.Builder(this)
+            .setTitle("إعدادات اللانشر")
+            .setView(container)
+            .setPositiveButton("حفظ") { _, _ ->
+                val chosenCity = cityOptions[citySpinner.selectedItemPosition]
+                val chosenMethod = methodOptions[methodSpinner.selectedItemPosition].first
+                val chosenBackground = backgroundOptions[backgroundSpinner.selectedItemPosition].first
+
+                cityName = chosenCity.name
+                lat = chosenCity.lat
+                lon = chosenCity.lon
+                method = chosenMethod
+                showWeather = weatherToggle.isChecked
+                showPrayer = prayerToggle.isChecked
+                backgroundKey = chosenBackground
+
+                saveSettings()
+                applySettings()
+                load()
+            }
+            .setNegativeButton("إلغاء", null)
+            .create()
+
+        dialog.show()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.parseColor("#1B2430")))
+    }
+
+    private fun applySettings() {
+        if (::weather.isInitialized) {
+            weather.visibility = if (showWeather) View.VISIBLE else View.GONE
+            if (showWeather) weather.text = "$cityName ..." else weather.text = ""
+        }
+
+        if (::prayerBar.isInitialized) {
+            prayerBar.visibility = if (showPrayer) View.VISIBLE else View.GONE
+        }
+
+        val root = findViewById<ViewGroup>(android.R.id.content)
+        if (root != null) applyBackgroundStyle(root)
+    }
+
+    private fun tv(s: String, size: Float) = TextView(this).apply {
+        text = s
+        textSize = size
+        setTextColor(Color.WHITE)
+    }
+
+    private fun bg(c: String) = GradientDrawable().apply {
+        cornerRadius = 24f
+        setColor(Color.parseColor(c))
+    }
+
+    private fun fmt(m: Int): String {
+        val hr = m / 60
+        val h12 = if (hr % 12 == 0) 12 else hr % 12
+        return "%d:%02d %s".format(h12, m % 60, if (hr >= 12) "م" else "ص")
+    }
+
+    private fun highlight() {
+        if (mins.any { it < 0 }) return
+
+        val c = Calendar.getInstance()
+        val now = c.get(Calendar.HOUR_OF_DAY) * 60 + c.get(Calendar.MINUTE)
+        val next = mins.indexOfFirst { it > now }.let { if (it < 0) 0 else it }
+
+        for (i in 0..4) {
+            boxes[i].background = bg(if (i == next) "#887FDBFF" else "#22FFFFFF")
+        }
+    }
+
+    private fun load() {
+        Thread {
+            try {
+                val cur = JSONObject(
+                    URL("https://api.open-meteo.com/v1/forecast?latitude=$lat&longitude=$lon&current=temperature_2m,weather_code").readText()
+                ).getJSONObject("current")
+
+                val temp = Math.round(cur.getDouble("temperature_2m"))
+                val icon = when (cur.getInt("weather_code")) {
+                    0 -> "☀️"
+                    1, 2 -> "🌤️"
+                    3 -> "☁️"
+                    45, 48 -> "🌫️"
+                    in 51..67, in 80..82 -> "🌧️"
+                    in 71..77 -> "❄️"
+                    in 95..99 -> "⛈️"
+                    else -> "🌡️"
+                }
+
+                runOnUiThread {
+                    if (showWeather) weather.text = "$icon $temp°\n$cityName"
+                }
+            } catch (e: Exception) {
+                runOnUiThread {
+                    if (showWeather) weather.text = "الطقس غير متوفر"
+                }
+            }
+
+            try {
+                val tm = JSONObject(
+                    URL("https://api.aladhan.com/v1/timings?latitude=$lat&longitude=$lon&method=$method").readText()
+                ).getJSONObject("data").getJSONObject("timings")
+
+                for (i in 0..4) {
+                    val p = tm.getString(keys[i]).take(5).split(":")
+                    mins[i] = p[0].toInt() * 60 + p[1].toInt()
+                }
+
+                runOnUiThread {
+                    if (showPrayer) {
+                        for (i in 0..4) times[i].text = fmt(mins[i])
+                    }
+                    highlight()
+                }
+            } catch (e: Exception) {
+            }
+        }.start()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        load()
+        h.post(tick)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        h.removeCallbacks(tick)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        // منع الخروج من التطبيق
+    }
+}
 
 # Controls when the workflow will run
 on:
